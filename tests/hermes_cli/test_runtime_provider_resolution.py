@@ -2845,10 +2845,10 @@ def test_minimax_oauth_pool_forces_anthropic_messages_despite_stale_config(monke
 @pytest.mark.parametrize(
     "alias,base_url",
     [
-        ("ollama", "http://192.168.0.103:11434/v1"),
-        ("vllm", "http://192.168.0.103:8000/v1"),
-        ("llamacpp", "http://192.168.0.103:8080/v1"),
-        ("llama-cpp", "http://192.168.0.103:8080/v1"),
+        ("ollama", "http://192.0.2.103:11434/v1"),
+        ("vllm", "http://192.0.2.103:8000/v1"),
+        ("llamacpp", "http://192.0.2.103:8080/v1"),
+        ("llama-cpp", "http://192.0.2.103:8080/v1"),
     ],
 )
 def test_custom_aliases_with_lan_base_url_route_to_custom_not_openrouter(
@@ -2898,11 +2898,11 @@ def test_trustworthy_check_accepts_custom_aliases():
     """_config_base_url_trustworthy_for_bare_custom() must accept aliases for custom."""
     fn = rp._config_base_url_trustworthy_for_bare_custom
     for alias in ("ollama", "vllm", "llamacpp", "llama-cpp", "llama.cpp"):
-        assert fn("http://192.168.0.103:11434/v1", alias) is True, (
+        assert fn("http://192.0.2.103:11434/v1", alias) is True, (
             f"alias {alias!r} should be trusted with non-loopback base_url"
         )
     # Unrelated provider name should still be rejected with non-loopback URL.
-    assert fn("http://192.168.0.103:11434/v1", "openrouter") is False
+    assert fn("http://192.0.2.103:11434/v1", "openrouter") is False
 
 
 def test_openai_key_only_sent_to_openai_host(monkeypatch):
@@ -3110,7 +3110,7 @@ def test_host_derived_key_helper_basic_cases():
 
     # IPs and loopback → empty.
     assert rp._host_derived_api_key("http://127.0.0.1:1234/v1") == ""
-    assert rp._host_derived_api_key("http://192.168.0.103:8080/v1") == ""
+    assert rp._host_derived_api_key("http://192.0.2.103:8080/v1") == ""
     assert rp._host_derived_api_key("http://localhost:1234") == ""
 
     # Empty / malformed → empty.

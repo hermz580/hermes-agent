@@ -86,7 +86,7 @@ def insecure_public_app():
     web_server.app.state.bound_host = "0.0.0.0"
     web_server.app.state.bound_port = 9120
     web_server.app.state.auth_required = False
-    client = TestClient(web_server.app, base_url="http://192.168.0.222:9120")
+    client = TestClient(web_server.app, base_url="http://192.0.2.222:9120")
     yield client
     _reset_for_tests()
     web_server.app.state.bound_host = prev_host
@@ -351,10 +351,10 @@ class TestWsRequestIsAllowedGated:
         with 403 because the loopback-only peer guard still ran even though
         the operator intentionally exposed the dashboard on all interfaces.
         """
-        ws = _fake_ws(query={}, client_host="192.168.0.55")
+        ws = _fake_ws(query={}, client_host="192.0.2.55")
         ws.headers = {
-            "host": "192.168.0.222:9120",
-            "origin": "http://192.168.0.222:9120",
+            "host": "192.0.2.222:9120",
+            "origin": "http://192.0.2.222:9120",
         }
         assert web_server._ws_request_is_allowed(ws) is True
 
@@ -435,8 +435,8 @@ class TestWsRequestIsAllowedGated:
         path the dashboard relies on."""
         ws = _fake_ws(query={}, client_host="")
         ws.headers = {
-            "host": "192.168.0.222:9120",
-            "origin": "http://192.168.0.222:9120",
+            "host": "192.0.2.222:9120",
+            "origin": "http://192.0.2.222:9120",
         }
         assert web_server._ws_client_is_allowed(ws) is True
 
