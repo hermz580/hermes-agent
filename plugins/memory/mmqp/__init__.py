@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,19 @@ from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
 logger = logging.getLogger(__name__)
+
+
+def _load_config() -> dict:
+    """Load profile-scoped MMQP configuration from $HERMES_HOME/mmqp.json."""
+    try:
+        from hermes_constants import get_hermes_home
+        path = get_hermes_home() / "mmqp.json"
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        logger.debug("Failed to load MMQP config: %s", exc)
+    return {}
 
 
 def _now() -> str:
@@ -52,7 +66,7 @@ MMQP_SCHEMA = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["remember", "recall", "inspect", "promote", "correct", "annotate", "signal", "lineage"],
+                "enum": ["remember", "recall", "inspect", "correct", "annotate", "signal", "lineage"],
             },
             "content": {"type": "string"},
             "query": {"type": "string"},
@@ -83,8 +97,9 @@ MMQP_SCHEMA = {
 
 class MMQPMemoryProvider(MemoryProvider):
     def __init__(self, config: Optional[dict] = None):
-        self._config = config or {}
+        self._config = config if config is not None else _load_config()
         self._conn: Optional[sqlite3.Connection] = None
+        self._lock = threading.RLock()
         self._session_id = ""
         self._parent_session_id = ""
 
@@ -113,11 +128,11 @@ class MMQPMemoryProvider(MemoryProvider):
     def initialize(self, session_id: str, **kwargs) -> None:
         hermes_home = Path(kwargs.get("hermes_home") or Path.home() / ".hermes")
         raw_path = str(self._config.get("db_path", hermes_home / "mmqp.db"))
-        raw_path = raw_path.replace("$HERMES_HOME", str(hermes_home)).replace("\${HERMES_HOME}", str(hermes_home))
+        raw_path = raw_path.replace("$HERMES_HOME", str(hermes_home)).replace("${HERMES_HOME}", str(hermes_home))
         db_path = Path(raw_path).expanduser()
         db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        self._conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=10.0)
+        self._conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=10.0, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
@@ -191,8 +206,6 @@ class MMQPMemoryProvider(MemoryProvider):
                 return json.dumps({"results": self._search(args.get("query", ""), int(args.get("limit", 10)))})
             if action == "inspect":
                 return json.dumps(self._inspect(args["memory_id"]))
-            if action == "promote":
-                return json.dumps(self._promote(args))
             if action == "correct":
                 return json.dumps(self._correct(args))
             if action == "annotate":
@@ -369,34 +382,49 @@ class MMQPMemoryProvider(MemoryProvider):
         ]
         return {"memory": dict(memory), "versions": versions, "council_annotations": annotations}
 
-    def _promote(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def promote_authorized(
+        self,
+        memory_id: str,
+        *,
+        authorized_by: str,
+        authorization_source: str,
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        """Promote a memory through trusted host code, never a model tool call.
+
+        The MemoryProvider tool surface intentionally does not expose this method.
+        A future MMQP UI/CLI policy gate can call it only after it has independently
+        verified the human/Cipher Seat authorization event.
+        """
         if not self._conn:
             raise RuntimeError("MMQP is not initialized")
-        memory_id = args["memory_id"]
-        authorized_by = (args.get("authorized_by") or "").strip()
-        authorization_source = (args.get("authorization_source") or "").strip()
+        authorized_by = (authorized_by or "").strip()
+        authorization_source = (authorization_source or "").strip()
         if not authorized_by or not authorization_source:
-            raise ValueError("promotion requires authorized_by and authorization_source")
-        row = self._conn.execute(
-            "SELECT state FROM memories WHERE memory_id = ?", (memory_id,)
-        ).fetchone()
-        if not row:
-            raise ValueError("memory not found")
-        old = row["state"]
-        self._conn.execute(
-            "UPDATE memories SET state='canonical', updated_at=? WHERE memory_id=?",
-            (_now(), memory_id),
-        )
-        self._conn.execute(
-            """
-            INSERT INTO promotion_events(
-                event_id, memory_id, from_state, to_state, authorized_by,
-                authorization_source, reason, created_at
-            ) VALUES (?, ?, ?, 'canonical', ?, ?, ?, ?)
-            """,
-            (_id("prom"), memory_id, old, authorized_by, authorization_source, args.get("reason", ""), _now()),
-        )
-        self._conn.commit()
+            raise ValueError("promotion requires verified authorized_by and authorization_source")
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT state FROM memories WHERE memory_id = ?", (memory_id,)
+            ).fetchone()
+            if not row:
+                raise ValueError("memory not found")
+            old = row["state"]
+            if old not in {"candidate", "disputed"}:
+                raise ValueError(f"memory in state {old!r} cannot be promoted")
+            now = _now()
+            self._conn.execute(
+                "UPDATE memories SET state='canonical', updated_at=? WHERE memory_id=?",
+                (now, memory_id),
+            )
+            self._conn.execute(
+                """
+                INSERT INTO promotion_events(
+                    event_id, memory_id, from_state, to_state, authorized_by,
+                    authorization_source, reason, created_at
+                ) VALUES (?, ?, ?, 'canonical', ?, ?, ?, ?)
+                """,
+                (_id("prom"), memory_id, old, authorized_by, authorization_source, reason, now),
+            )
         return {"memory_id": memory_id, "state": "canonical", "previous_state": old}
 
     def _correct(self, args: Dict[str, Any]) -> Dict[str, Any]:
