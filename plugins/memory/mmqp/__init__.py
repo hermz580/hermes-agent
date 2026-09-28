@@ -110,6 +110,18 @@ class MMQPMemoryProvider(MemoryProvider):
     def is_available(self) -> bool:
         return True
 
+    def save_config(self, values, hermes_home):
+        """Persist provider settings in the active profile's mmqp.json."""
+        path = Path(hermes_home) / "mmqp.json"
+        existing = {}
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                existing = {}
+        existing.update(values or {})
+        path.write_text(json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8")
+
     def get_config_schema(self):
         from hermes_constants import display_hermes_home
         return [
