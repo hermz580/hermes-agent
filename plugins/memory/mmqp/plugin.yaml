@@ -1,0 +1,8 @@
+name: mmqp
+version: 0.1.0
+description: "MMQP Cathedral Memory — provenance-first episodic memory with candidate/canon promotion, multimodal signal intake, Council annotations, and lineage."
+hooks:
+  - on_session_end
+  - on_session_switch
+  - on_pre_compress
+  - on_memory_write
